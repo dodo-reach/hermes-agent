@@ -1,0 +1,53 @@
+{
+  "id": "virgilio_people",
+  "name": "Virgilio People",
+  "category": "people_search",
+  "priority": "high",
+  "jurisdictions": ["EU-IT"],
+  "gdpr_scope": true,
+  "parent": "italiaonline",
+  "owns": [],
+  "search": {
+    "method": "url_pattern",
+    "url": "https://persone.virgilio.it/",
+    "fetch": "browser",
+    "match_signal": "result",
+    "by": ["name", "phone"]
+  },
+  "optout": {
+    "tier": "T2",
+    "method": "email",
+    "email": "privacy@virgilio.it",
+    "requires": {
+      "profile_url": false,
+      "email_verification": true,
+      "captcha": false,
+      "gov_id": true,
+      "account": false,
+      "phone_callback": false,
+      "payment": false
+    },
+    "inputs": ["full_name", "contact_email"],
+    "deletion": {
+      "via": "email_followup",
+      "email": "privacy@virgilio.it",
+      "kinds": ["gdpr"],
+      "notes": "privacy@ is the documented DPO contact; Italiaonline S.p.A. (Assago, Italy) is the parent (same as Pagine Bianche, Libero Mail, Virgilio, PagineGialle, Tuttocittà). Consider sending a single combined Art. 17 request to privacy@virgilio.it naming all affected directories; the parent may consolidate the response."
+    },
+    "playbook": [
+      "Search the record on persone.virgilio.it.",
+      "Send Art. 17 erasure request to privacy@virgilio.it.",
+      "Attach copy of photo ID.",
+      "If no response within 30 days, escalate to Garante via pdd.py escalate --dpa garante."
+    ],
+    "quirks": [
+      "Same parent as Pagine Bianche (Italiaonline) — consider sending a single combined request covering both.",
+      "Smaller user base than Pagine Bianche but the same legal regime applies."
+    ],
+    "est_processing_days": 30,
+    "reappearance_risk": "low"
+  },
+  "last_verified": null,
+  "source": "curated",
+  "confidence": "documented"
+}

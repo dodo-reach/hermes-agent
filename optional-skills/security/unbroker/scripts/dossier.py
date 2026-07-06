@@ -14,6 +14,61 @@ NEVER_VOLUNTEER = {"ssn", "social_security_number", "passport", "drivers_license
 
 VALID_CONSENT_METHODS = {"self", "written_authorization", "poa"}
 
+# Residency -> legal framework. US codes map to CCPA/CPRA state variants (existing behaviour);
+# EU-* and UK codes map to GDPR/UK-GDPR. Anything else falls back to a generic right-to-delete
+# request (no specific legal cite — the broker may or may not honour it).
+RESIDENCY_LEGAL_FRAMEWORK = {
+    # United States
+    "US":     {"framework": "ccpa",      "default_request_kind": "ccpa",       "dpa": None},
+    "US-CA":  {"framework": "ccpa",      "default_request_kind": "ccpa",       "dpa": None},
+    "US-NY":  {"framework": "ccpa_ny",   "default_request_kind": "ccpa",       "dpa": None},
+    "US-VT":  {"framework": "ccpa_vt",   "default_request_kind": "ccpa",       "dpa": None},
+    "US-OR":  {"framework": "ccpa_or",   "default_request_kind": "ccpa",       "dpa": None},
+    "US-TX":  {"framework": "ccpa_tx",   "default_request_kind": "ccpa",       "dpa": None},
+    # European Union + EEA (one code per member state — extend as new EU members join)
+    # European Union + EEA (one code per member state — extend as new EU members join).
+    # For member states without a shipped adapter, `dpa` is None; subjects in those
+    # countries still get GDPR (framework + default_request_kind), but `cmd_escalate`
+    # prints a clear "no DPA adapter" message pointing them at `--dpa generic`. Phase 3
+    # will add adapters for the remaining authorities (aepd for Spain, ap for NL, etc.).
+    "EU":     {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},
+    "EU-IT":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": "garante"},
+    "EU-FR":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": "cnil"},
+    "EU-DE":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": "bfdi"},
+    "EU-ES":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # aepd adapter pending
+    "EU-NL":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # ap adapter pending
+    "EU-BE":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # apd adapter pending
+    "EU-AT":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # dsb adapter pending
+    "EU-IE":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # dpc adapter pending
+    "EU-PT":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # cnpd adapter pending
+    "EU-PL":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # uodo adapter pending
+    "EU-SE":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # imy adapter pending
+    "EU-DK":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # datatilsynet adapter pending
+    "EU-FI":  {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # om adapter pending
+    "EU-EEA": {"framework": "gdpr",      "default_request_kind": "gdpr",       "dpa": None},  # EEA but non-EU (Norway, Iceland, Liechtenstein)
+    # United Kingdom (post-Brexit UK GDPR, enforced by ICO)
+    "UK":     {"framework": "uk_gdpr",   "default_request_kind": "gdpr",       "dpa": "ico"},
+}
+
+
+def legal_framework(residency: str) -> dict:
+    """Return the legal-framework metadata for a residency code; fallback for unknown codes.
+
+    The fallback is deliberately permissive: an unknown residency code yields a generic
+    right-to-delete request rather than refusing — a subject can still try, just without
+    a specific GDPR/CCPA citation. Better than locking them out.
+    """
+    return RESIDENCY_LEGAL_FRAMEWORK.get(
+        residency,
+        {"framework": "generic", "default_request_kind": "generic", "dpa": None},
+    )
+
+
+def is_eu_residency(residency: str) -> bool:
+    """True if the residency is an EU/EEA/UK code that maps to GDPR/UK-GDPR."""
+    meta = RESIDENCY_LEGAL_FRAMEWORK.get(residency)
+    return bool(meta and meta["framework"] in ("gdpr", "uk_gdpr"))
+
 
 def now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

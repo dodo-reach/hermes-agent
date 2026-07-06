@@ -1,0 +1,54 @@
+{
+  "id": "locasystem",
+  "name": "Locasystem",
+  "category": "people_search",
+  "priority": "crucial",
+  "jurisdictions": ["EU-FR"],
+  "gdpr_scope": true,
+  "parent": "locasystem",
+  "owns": [],
+  "search": {
+    "method": "url_pattern",
+    "url": "https://www.locasystem.fr/",
+    "fetch": "browser",
+    "match_signal": "result",
+    "by": ["name", "phone", "address"]
+  },
+  "optout": {
+    "tier": "T2",
+    "method": "email",
+    "email": "rgpd@locasystem.fr",
+    "requires": {
+      "profile_url": false,
+      "email_verification": true,
+      "captcha": false,
+      "gov_id": true,
+      "account": false,
+      "phone_callback": false,
+      "payment": false
+    },
+    "inputs": ["full_name", "contact_email", "current_address"],
+    "deletion": {
+      "via": "email_followup",
+      "email": "rgpd@locasystem.fr",
+      "kinds": ["gdpr"],
+      "notes": "rgpd@ is the French RGPD contact. Article 17 erasure request must include proof of identity (per CNIL guidance). Contact email and playbook structure based on standard French data-broker opt-out patterns; live Art.17 verification pending."
+    },
+    "playbook": [
+      "Search the record on locasystem.fr (French phone/address directory).",
+      "Send Art. 17 erasure request to rgpd@locasystem.fr (French or English; French preferred for faster response).",
+      "Attach a copy of photo ID (per CNIL standard practice for first-time requests).",
+      "Expected response within 30 days per Art. 12(3). If no response, escalate to CNIL via pdd.py escalate."
+    ],
+    "quirks": [
+      "French-only UI; English requests are accepted but processed more slowly.",
+      "ID requirement is firm — anonymous requests are rejected.",
+      "Listings may reappear from upstream phone directory aggregators; schedule re-scan."
+    ],
+    "est_processing_days": 30,
+    "reappearance_risk": "medium"
+  },
+  "last_verified": null,
+  "source": "curated",
+  "confidence": "documented"
+}

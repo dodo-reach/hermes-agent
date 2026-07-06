@@ -36,6 +36,7 @@ import brokers as brokers_mod      # noqa: E402
 import config as config_mod        # noqa: E402
 import crypto                       # noqa: E402
 import dossier as dossier_mod      # noqa: E402
+import dpa                          # noqa: E402
 import email_modes                 # noqa: E402
 import emailer                     # noqa: E402
 import ledger as ledger_mod        # noqa: E402
@@ -434,6 +435,91 @@ def cmd_drop(args) -> None:
             "(`registry --search`, then `send-email`).",
         ]),
         "note": "DROP is the highest-leverage removal: one request covers the whole registry.",
+    })
+
+
+def cmd_escalate(args) -> None:
+    """EU escalation path: render (and optionally send) an Art. 77 complaint to the subject's
+    national supervisory authority after a broker failed to honour an Art. 17 request.
+
+    Two modes:
+      --render (default) - render the complaint text, save it to drafts/<dpa>_<broker>.txt,
+                           print the path. The subject reviews, attaches evidence, and files.
+      --file             - record the complaint as filed (post-send). Writes a ledger entry
+                           and removes the broker from the autonomous queue.
+    """
+    d = _require_subject(args.subject)
+    dossier_mod.require_authorized(d)
+
+    residency = (d.get("residency_jurisdiction") or "").upper()
+    if not residency.startswith("EU") and residency != "UK":
+        _out({"error": f"residency {residency!r} is not EU/UK — Art. 77 escalation not applicable",
+              "hint": "this command is for GDPR jurisdictions; CCPA complaints go through the CA AG"})
+        return
+
+    adapter = dpa.for_residency(residency)
+    if not adapter:
+        _out({"error": f"no DPA adapter registered for residency {residency!r}",
+              "known_residency_dpas": [k for k, v in dossier_mod.RESIDENCY_LEGAL_FRAMEWORK.items() if v.get("dpa")],
+              "fallback": "use --dpa generic to render a language-neutral complaint"})
+        return
+
+    broker = brokers_mod.get(args.broker) or {"name": args.broker, "id": args.broker}
+    dossier_ident = d.get("identity") or {}
+    addr = dossier_ident.get("current_address") or {}
+
+    fields = {
+        "full_name": dossier_ident.get("full_name", "[your name]"),
+        "contact_email": dossier_mod.contact_email(d) or "[your email]",
+        "current_address": " ".join(filter(None, [
+            addr.get("line1"), addr.get("postal"), addr.get("city"), addr.get("state")
+        ])) or "[your address]",
+        "city": addr.get("city", ""),
+        "state": addr.get("state", ""),
+        "postal": addr.get("postal", ""),
+        "broker_name": broker.get("name", args.broker),
+        "request_date": args.request_date or d.get("preferences", {}).get(
+            f"art17_filed_{args.broker}", "[the date you sent the original request]"),
+        "request_channel": args.request_channel or "email",
+    }
+
+    if args.file:
+        # record that the complaint was filed; the autonomous queue will stop re-surfacing
+        prefs = d.setdefault("preferences", {})
+        prefs[f"dpa_complaint_filed_{args.broker}"] = dossier_mod.now()
+        prefs[f"dpa_complaint_dpa_{args.broker}"] = adapter["id"]
+        dossier_mod.save(d)
+        ledger_mod.transition(args.subject, args.broker, "human_task_queued",
+                             reason=f"DPA complaint filed with {adapter['name']}",
+                             dpa=adapter["id"])
+        _out({"subject": args.subject, "broker": args.broker, "dpa": adapter["id"],
+              "filed_at": prefs[f"dpa_complaint_filed_{args.broker}"],
+              "note": "recorded; `next` will stop re-surfacing this broker pending DPA response"})
+        return
+
+    # default: render the complaint
+    text = legal.render_dpa_complaint(adapter["id"], fields)
+    drafts_dir = paths_mod.subject_dir(args.subject) / "drafts"
+    drafts_dir.mkdir(parents=True, exist_ok=True)
+    out_path = drafts_dir / f"dpa_complaint_{adapter['id']}_{args.broker}.txt"
+    out_path.write_text(text, encoding="utf-8")
+    _out({
+        "subject": args.subject,
+        "broker": args.broker,
+        "dpa": adapter["id"],
+        "dpa_name": adapter["name"],
+        "web_form_url": adapter.get("web_form_url"),
+        "email": adapter.get("email"),
+        "pec": adapter.get("pec"),
+        "complaint_path": str(out_path),
+        "complaint_chars": len(text),
+        "next_steps": [
+            f"Review {out_path.name}",
+            "Attach: (1) copy of the Art. 17 request you sent to the broker; "
+            "(2) proof of receipt; (3) any broker response; (4) copy of a photo ID.",
+            f"File via {adapter.get('web_form_url', 'the DPA web form')}",
+            "Run `escalate <subject> <broker> --dpa {id} --file` once filed (stops re-surfacing)".format(id=adapter["id"]),
+        ],
     })
 
 
@@ -841,10 +927,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("broker")
     s.add_argument("--listing", action="append", metavar="URL", required=False,
                    help="confirmed listing URL (required: verify-before-disclose)")
-    s.add_argument("--kind", choices=["generic", "ccpa", "ccpa_agent", "ccpa_indirect", "gdpr"],
+    s.add_argument("--kind",
+                   choices=["generic", "ccpa", "ccpa_agent", "ccpa_indirect",
+                            "gdpr", "gdpr_art21_only", "gdpr_indirect"],
                    default="generic")
     s.add_argument("--identifier", action="append", metavar="ID",
-                   help="(ccpa_indirect only) a specific own-identifier to remove; repeatable")
+                   help="(ccpa_indirect / gdpr_indirect only) a specific own-identifier to remove; repeatable")
     s.add_argument("--to", help="override recipient (must be an address the broker record declares)")
     s.add_argument("--force", action="store_true", help="re-send even if already submitted (default: idempotent skip)")
     s.set_defaults(func=cmd_send_email)
@@ -881,15 +969,34 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("subject")
     s.add_argument("broker")
     s.add_argument("--listing", action="append", metavar="URL", help="confirmed listing URL")
-    s.add_argument("--kind", choices=["generic", "ccpa", "ccpa_agent", "ccpa_indirect", "gdpr"],
+    s.add_argument("--kind",
+                   choices=["generic", "ccpa", "ccpa_agent", "ccpa_indirect",
+                            "gdpr", "gdpr_art21_only", "gdpr_indirect"],
                    default="generic",
-                   help="request type. 'ccpa_indirect' = delete MY identifiers from a third party's "
-                        "record (indirect exposure); default 'generic' opt-out.")
+                   help="request type. 'ccpa_indirect' / 'gdpr_indirect' = delete MY identifiers from "
+                        "a third party's record; 'gdpr_art21_only' = Art. 21 objection only "
+                        "(brokers with strong legitimate-interest claims); default 'generic' opt-out.")
     s.add_argument("--identifier", action="append", metavar="ID",
-                   help="(ccpa_indirect only) a specific own-identifier to request removal of "
-                        "(e.g. an email or phone). Repeatable. Defaults to the contact email + "
-                        "name-as-relative if omitted.")
+                   help="(ccpa_indirect / gdpr_indirect only) a specific own-identifier to request "
+                        "removal of (e.g. an email or phone). Repeatable. Defaults to the contact "
+                        "email + name-as-relative if omitted.")
     s.set_defaults(func=cmd_render_email)
+
+    s = sub.add_parser("escalate",
+                       help="EU/UK: render an Art. 77 complaint to the subject's national DPA "
+                            "(after a broker failed to honour an Art. 17 request). Default renders "
+                            "to a draft file; pass --file once filed to stop re-surfacing.")
+    s.add_argument("subject")
+    s.add_argument("broker")
+    s.add_argument("--dpa", help="override DPA id (default: infer from subject residency)")
+    s.add_argument("--request-date", dest="request_date",
+                   help="when you sent the Art. 17 request to the broker (default: lookup in dossier prefs)")
+    s.add_argument("--request-channel", dest="request_channel", default="email",
+                   help="how you sent the Art. 17 request (email / PEC / web form / post)")
+    s.add_argument("--file", action="store_true",
+                   help="record the complaint as filed (post-send); stops the autonomous queue "
+                        "from re-surfacing this broker")
+    s.set_defaults(func=cmd_escalate)
 
     s = sub.add_parser("status", help="print a Markdown status report")
     s.add_argument("subject")
